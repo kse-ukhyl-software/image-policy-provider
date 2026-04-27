@@ -85,7 +85,10 @@ def _run_cosign_verify(image: str, cfg: VerifierConfig) -> None:
         )
     cmd.append(image)
 
-    logger.info("verifying signature for %s", image)
+    # Logged at DEBUG so the per-image INFO line in main.py stays the
+    # primary teaching artifact; flip LOG_LEVEL=DEBUG to see the
+    # actual cosign command line that ran.
+    logger.debug("running: %s", " ".join(cmd))
     proc = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
     if proc.returncode != 0:
         raise VerificationError(
