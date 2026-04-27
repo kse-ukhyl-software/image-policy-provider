@@ -42,6 +42,7 @@ Single endpoint `POST /validate` consuming the upstream Gatekeeper schema:
 | `COSIGN_IDENTITY` | unset | expected signer identity (keyless mode) |
 | `COSIGN_OIDC_ISSUER` | unset | expected OIDC issuer (keyless mode) |
 | `LOG_LEVEL` | `INFO` | uvicorn / app log level |
+| `LOG_BODIES` | unset | when `true`, dump the full `ProviderRequest` / `ProviderResponse` JSON on each admission. Off by default; flip on for teaching / debugging. |
 
 TLS is terminated by uvicorn using the cert files at `/etc/tls/tls.{crt,key}`,
 which cert-manager mounts from a `Certificate` issued by the in-cluster Vault

@@ -8,9 +8,14 @@ call produces:
   - a "request" line listing the keys Gatekeeper sent
   - one "key" line per image with verified/error outcome
   - a "response" summary with verified/error counts
+
+Set `LOG_BODIES=true` to also dump the full ProviderRequest and
+ProviderResponse JSON exchanged with Gatekeeper -- useful for
+teaching, noisy in production.
 """
 from __future__ import annotations
 
+import json
 import logging
 import os
 import time
@@ -32,6 +37,8 @@ logging.basicConfig(
 )
 logger = logging.getLogger("image-policy-provider")
 
+LOG_BODIES = os.getenv("LOG_BODIES", "").lower() in ("1", "true", "yes")
+
 app = FastAPI(title="image-policy-provider", version="0.1.0")
 _config = VerifierConfig.from_env()
 
@@ -45,10 +52,25 @@ def _trust_mode(cfg: VerifierConfig) -> str:
 
 
 logger.info(
-    "verifier configured: allowed_registries=%s, trust_mode=%s",
+    "verifier configured: allowed_registries=%s, trust_mode=%s, log_bodies=%s",
     _config.allowed_registries,
     _trust_mode(_config),
+    LOG_BODIES,
 )
+
+
+def _dump_json(label: str, rid: str, payload) -> None:
+    """Pretty-print the full request/response body to logs."""
+    if hasattr(payload, "model_dump"):  # pydantic v2
+        body = payload.model_dump(mode="json")
+    elif hasattr(payload, "dict"):  # pydantic v1 fallback
+        body = payload.dict()
+    else:
+        body = payload
+    text = json.dumps(body, indent=2, default=str)
+    # Each line gets the rid prefix so grep [<rid>] picks the whole entry.
+    for line in (f"[{rid}] {label}:\n" + text).splitlines():
+        logger.info(line)
 
 
 @app.get("/healthz")
@@ -66,6 +88,8 @@ def validate(request: ProviderRequest) -> ProviderResponse:
     rid = uuid.uuid4().hex[:8]
     keys = list(request.request.keys)
     logger.info("[%s] request: %d keys -> %s", rid, len(keys), keys)
+    if LOG_BODIES:
+        _dump_json("ProviderRequest body", rid, request)
 
     items: list[ProviderResponseItem] = []
     started = time.monotonic()
@@ -97,4 +121,7 @@ def validate(request: ProviderRequest) -> ProviderResponse:
         rid, verified, rejected, total_ms,
     )
 
-    return ProviderResponse(response=ProviderResponseBody(items=items))
+    response = ProviderResponse(response=ProviderResponseBody(items=items))
+    if LOG_BODIES:
+        _dump_json("ProviderResponse body", rid, response)
+    return response
