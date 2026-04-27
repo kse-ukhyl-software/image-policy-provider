@@ -1,15 +1,32 @@
 """Image signature verification.
 
-Two layers:
-1. Cheap structural checks (digest pinning, registry allowlist).
-2. Cosign signature verification, delegated to the `cosign` CLI which is
-   installed inside the container image. We shell out instead of binding
-   to a Python library so the verification semantics match the canonical
-   Sigstore implementation byte-for-byte.
+The trust gate is the **Cosign signature**, not digest pinning. We
+shell out to the `cosign` CLI baked into the container image; an
+unsigned image fails with a clear "no matching signatures" message
+from cosign itself, which is the security property students are
+meant to internalize.
 
-The verifier is intentionally small. Anything that cannot be answered with
-the local trust material is treated as a failure -- Gatekeeper denies by
-default when the provider returns an error for a key.
+Why shell out to cosign rather than use sigstore-python? cosign is
+the canonical Sigstore implementation, identical semantics to what
+GitHub Actions's `actions/attest-build-provenance` (and Sigstore's
+own tooling) emits. sigstore-python is a great SDK for *artifact*
+signatures but does not currently understand OCI container-image
+signature discovery on its own; reimplementing that here would just
+diverge from cosign without buying us anything.
+
+Two cheap pre-checks run before cosign:
+  * Registry allowlist -- repo must start with one of the prefixes in
+    `ALLOWED_REGISTRIES`. Refuses to even look up signatures for
+    images outside the trust boundary.
+  * Digest-pin warning -- tag-only refs are mutable, so we *log*
+    when one slips through, but we let cosign run anyway. cosign
+    resolves the tag to a digest internally; if no signature is
+    attached, cosign returns "no matching signatures" and that
+    becomes the rejection reason. This is what students should see
+    when they try to deploy a random `nginx:latest`.
+
+Anything cosign cannot prove is treated as a failure; Gatekeeper
+denies the admission for any key whose `error` field is non-empty.
 """
 from __future__ import annotations
 
@@ -24,6 +41,7 @@ from typing import List, Optional
 logger = logging.getLogger(__name__)
 
 DIGEST_RE = re.compile(r"^(?P<repo>[^@]+)@sha256:[a-f0-9]{64}$")
+TAG_RE = re.compile(r"^(?P<repo>[^@:]+)(?::[^@]+)?$")
 
 
 @dataclass(frozen=True)
@@ -50,13 +68,19 @@ class VerificationError(Exception):
     """Raised when an image fails any verification step."""
 
 
-def _ensure_digest(image: str) -> str:
-    match = DIGEST_RE.match(image)
-    if not match:
-        raise VerificationError(
-            f"image {image!r} is not pinned to a digest (expected repo@sha256:<64hex>)"
-        )
-    return match.group("repo")
+def _split_repo(image: str) -> str:
+    """Return the repository portion of an image reference.
+
+    Accepts both digest (`repo@sha256:...`) and tag (`repo:tag` or
+    just `repo`) forms. Raises if neither matches.
+    """
+    m = DIGEST_RE.match(image)
+    if m:
+        return m.group("repo")
+    m = TAG_RE.match(image)
+    if m:
+        return m.group("repo")
+    raise VerificationError(f"image {image!r} is not a valid image reference")
 
 
 def _ensure_allowed_registry(repo: str, allowed: List[str]) -> None:
@@ -91,6 +115,9 @@ def _run_cosign_verify(image: str, cfg: VerifierConfig) -> None:
     logger.debug("running: %s", " ".join(cmd))
     proc = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
     if proc.returncode != 0:
+        # cosign's own message ("no matching signatures", "certificate
+        # identity does not match expected", ...) is exactly the kind
+        # of reason students should see -- pass it through verbatim.
         raise VerificationError(
             f"cosign verify failed: {proc.stderr.strip() or proc.stdout.strip()}"
         )
@@ -98,7 +125,12 @@ def _run_cosign_verify(image: str, cfg: VerifierConfig) -> None:
 
 def verify_image(image: str, cfg: VerifierConfig) -> str:
     """Verify a single image reference. Returns a short success summary."""
-    repo = _ensure_digest(image)
+    repo = _split_repo(image)
     _ensure_allowed_registry(repo, cfg.allowed_registries)
+    if not DIGEST_RE.match(image):
+        # Tag-style refs are accepted but flagged. cosign resolves the
+        # tag to a digest; the signature lookup happens against the
+        # resolved digest either way.
+        logger.info("image %s is not pinned to a digest (mutable tag)", image)
     _run_cosign_verify(image, cfg)
     return "verified"
