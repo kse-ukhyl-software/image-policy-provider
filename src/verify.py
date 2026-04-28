@@ -54,13 +54,9 @@ class VerifierConfig:
 
     @classmethod
     def from_env(cls) -> "VerifierConfig":
-        # Default unset (signature is the only gate). Set
-        # ALLOWED_REGISTRIES to a comma-separated list of repo
-        # prefixes to also enforce a registry allowlist before cosign
-        # is invoked -- useful in production to skip the round-trip.
-        allowed_raw = os.getenv("ALLOWED_REGISTRIES", "")
+        allowed = os.getenv("ALLOWED_REGISTRIES", "ghcr.io/kse-bd8338bbe006")
         return cls(
-            allowed_registries=[r.strip() for r in allowed_raw.split(",") if r.strip()],
+            allowed_registries=[r.strip() for r in allowed.split(",") if r.strip()],
             cosign_key_path=os.getenv("COSIGN_KEY_PATH") or None,
             cosign_identity=os.getenv("COSIGN_IDENTITY") or None,
             cosign_oidc_issuer=os.getenv("COSIGN_OIDC_ISSUER") or None,
@@ -88,11 +84,6 @@ def _split_repo(image: str) -> str:
 
 
 def _ensure_allowed_registry(repo: str, allowed: List[str]) -> None:
-    # Empty allowlist means "every registry is fine, defer to cosign".
-    # Treats the allowlist as an opt-in layer-1 filter rather than a
-    # mandatory gate -- the actual trust decision is the signature.
-    if not allowed:
-        return
     if not any(repo == prefix or repo.startswith(prefix + "/") for prefix in allowed):
         raise VerificationError(
             f"image repository {repo!r} is not in the allowed registry list {allowed}"
