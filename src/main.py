@@ -15,6 +15,7 @@ teaching, noisy in production.
 """
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import os
@@ -75,11 +76,48 @@ def _dump_json(label: str, rid: str, payload) -> None:
 
 @app.get("/healthz")
 def healthz() -> dict:
+    """Liveness: process is up and the HTTP server is responding."""
     return {"status": "ok"}
 
 
+@app.get("/readyz")
+def readyz():
+    """Readiness: the verifier is actually configured to do its job.
+
+    We refuse traffic until cosign is on the PATH and at least one
+    trust mode (key path OR keyless identity+issuer) is set. This
+    prevents the noisy 'no cosign trust material configured' error
+    on every key during boot, and matches Ratify's split between
+    /healthz (liveness) and /readyz (readiness) on its manager port.
+    """
+    import shutil
+
+    problems = []
+    if shutil.which(_config.cosign_binary) is None:
+        problems.append(f"cosign binary {_config.cosign_binary!r} not on PATH")
+    if not _config.cosign_key_path and not (
+        _config.cosign_identity and _config.cosign_oidc_issuer
+    ):
+        problems.append(
+            "no cosign trust material (set COSIGN_KEY_PATH, or "
+            "COSIGN_IDENTITY + COSIGN_OIDC_ISSUER)"
+        )
+    if problems:
+        raise HTTPException(status_code=503, detail={"problems": problems})
+    return {"status": "ready"}
+
+
+# Hard upper bound on a single cosign verify call. Gatekeeper's
+# external-data webhook timeout (Provider.spec.timeout) is what
+# matters in practice, but if Gatekeeper has already given up,
+# leaving this thread blocked on a stalled registry would tie up
+# a Uvicorn worker for ages. Match Ratify's middlewareWithTimeout
+# default for the verify path.
+PER_KEY_TIMEOUT_S = float(os.getenv("PER_KEY_TIMEOUT_S", "5"))
+
+
 @app.post("/validate", response_model=ProviderResponse)
-def validate(request: ProviderRequest) -> ProviderResponse:
+async def validate(request: ProviderRequest) -> ProviderResponse:
     if request.kind != "ProviderRequest":
         raise HTTPException(status_code=400, detail=f"unexpected kind {request.kind!r}")
 
@@ -96,10 +134,26 @@ def validate(request: ProviderRequest) -> ProviderResponse:
     for key in keys:
         t0 = time.monotonic()
         try:
-            summary = verify_image(key, _config)
+            # Run the blocking cosign call on the default executor so
+            # the event loop can serve other requests, with a hard
+            # per-key deadline. Gatekeeper's webhook timeout is upstream
+            # of this; ours is a defence-in-depth bound on stalls.
+            summary = await asyncio.wait_for(
+                asyncio.to_thread(verify_image, key, _config),
+                timeout=PER_KEY_TIMEOUT_S,
+            )
             elapsed_ms = int((time.monotonic() - t0) * 1000)
             logger.info("[%s] key OK   (%d ms): %s", rid, elapsed_ms, key)
             items.append(ProviderResponseItem(key=key, value=summary))
+        except asyncio.TimeoutError:
+            elapsed_ms = int((time.monotonic() - t0) * 1000)
+            logger.warning(
+                "[%s] key TIMEOUT (%d ms): %s", rid, elapsed_ms, key
+            )
+            items.append(ProviderResponseItem(
+                key=key,
+                error=f"verifier timed out after {PER_KEY_TIMEOUT_S:.1f}s",
+            ))
         except VerificationError as exc:
             elapsed_ms = int((time.monotonic() - t0) * 1000)
             logger.warning(

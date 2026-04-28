@@ -30,7 +30,12 @@ class ProviderResponseItem(BaseModel):
 
 
 class ProviderResponseBody(BaseModel):
-    idempotent: bool = True
+    # Per OPA's externaldata.ProviderResponse contract, `idempotent`
+    # is meaningful only for *mutation* providers ("Applies to mutation
+    # only and must be true for mutation"). A verification provider
+    # like ours should leave it false; Ratify does the same -- it
+    # sets idempotent to the mutation flag, never hard-codes true.
+    idempotent: bool = False
     items: List[ProviderResponseItem] = Field(default_factory=list)
     systemError: Optional[str] = None
 
