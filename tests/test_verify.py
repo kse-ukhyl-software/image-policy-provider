@@ -41,6 +41,11 @@ def test_registry_allowlist_rejects_lookalike():
         )
 
 
+def test_registry_allowlist_empty_is_allow_all():
+    # Empty allowlist -> no allowlist enforcement; signature is the only gate.
+    _ensure_allowed_registry("docker.io/library/nginx", [])
+
+
 def test_config_from_env(monkeypatch):
     monkeypatch.setenv("ALLOWED_REGISTRIES", "ghcr.io/a, ghcr.io/b")
     monkeypatch.setenv("COSIGN_KEY_PATH", "/etc/cosign/cosign.pub")
