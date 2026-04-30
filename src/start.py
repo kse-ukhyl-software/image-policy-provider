@@ -63,12 +63,12 @@ def main() -> None:
         "src.main:app",
         host=host,
         port=port,
-        # uvicorn 0.27+ exposes `ssl_minimum_version` directly; we
-        # set it AFTER constructing kwargs so older uvicorn versions
-        # gracefully fall back to whatever the Python ssl default is.
-        ssl_minimum_version=ssl.TLSVersion.TLSv1_3,
         **_ssl_kwargs(),
     )
+    # uvicorn.Config has no ssl_minimum_version kwarg; build the
+    # SSLContext eagerly via load() and raise the floor on it directly.
+    config.load()
+    config.ssl.minimum_version = ssl.TLSVersion.TLSv1_3
     uvicorn.Server(config).run()
 
 
