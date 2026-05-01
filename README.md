@@ -33,6 +33,7 @@ Single endpoint `POST /validate` consuming the upstream Gatekeeper schema:
 }
 ```
 
+
 ## Configuration
 
 | env | default | meaning |
