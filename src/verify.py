@@ -95,13 +95,13 @@ def _run_cosign_verify(image: str, cfg: VerifierConfig) -> None:
         raise VerificationError(f"cosign binary {cfg.cosign_binary!r} not found in PATH")
 
     cmd = [cfg.cosign_binary, "verify", "--output", "json"]
-    if cfg.cosign_key_path:
-        cmd += ["--key", cfg.cosign_key_path]
-    elif cfg.cosign_identity and cfg.cosign_oidc_issuer:
+    if cfg.cosign_identity and cfg.cosign_oidc_issuer:
         cmd += [
             "--certificate-identity", cfg.cosign_identity,
             "--certificate-oidc-issuer", cfg.cosign_oidc_issuer,
         ]
+    elif cfg.cosign_key_path:
+        cmd += ["--key", cfg.cosign_key_path]
     else:
         raise VerificationError(
             "no cosign trust material configured (set COSIGN_KEY_PATH or "
