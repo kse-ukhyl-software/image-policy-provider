@@ -45,10 +45,10 @@ _config = VerifierConfig.from_env()
 
 
 def _trust_mode(cfg: VerifierConfig) -> str:
-    if cfg.cosign_key_path:
-        return f"key ({cfg.cosign_key_path})"
     if cfg.cosign_identity and cfg.cosign_oidc_issuer:
         return f"keyless (identity={cfg.cosign_identity}, issuer={cfg.cosign_oidc_issuer})"
+    if cfg.cosign_key_path:
+        return f"key ({cfg.cosign_key_path})"
     return "unset (every image will fail)"
 
 
